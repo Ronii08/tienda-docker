@@ -1,0 +1,86 @@
+services:
+
+  # ---------- BASE DE DATOS ----------
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      # ${VAR} toma el valor del archivo .env
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Falta MYSQL_ROOT_PASSWORD en .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?Falta MYSQL_DATABASE en .env}
+      MYSQL_USER: ${MYSQL_USER:?Falta MYSQL_USER en .env}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Falta MYSQL_PASSWORD en .env}
+    volumes:
+      # Volumen con nombre: los datos sobreviven si borras el contenedor
+      - db_data:/var/lib/mysql
+      # Script SQL opcional que se ejecuta solo la primera vez:
+      # - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # SIN "ports": MySQL queda accesible solo dentro de la red de Docker
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend_net
+
+  # ---------- BACKEND: PHP-FPM (Laravel) ----------
+  app:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_KEY: ${APP_KEY:?Falta APP_KEY en .env}
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      # Los logs salen por consola: se ven con "docker compose logs"
+      LOG_CHANNEL: stderr
+      DB_CONNECTION: mysql
+      DB_HOST: db            # <- el nombre del servicio de arriba
+      DB_PORT: 3306
+      DB_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: ${MYSQL_USER}
+      DB_PASSWORD: ${MYSQL_PASSWORD}
+      CACHE_STORE: file
+      SESSION_DRIVER: file
+      QUEUE_CONNECTION: sync
+      JWT_SECRET: ${JWT_SECRET:?Falta JWT_SECRET en .env}
+    depends_on:
+      db:
+        condition: service_healthy   # espera a que MySQL esté listo
+    networks:
+      - backend_net
+
+  # ---------- BACKEND: SERVIDOR WEB (Nginx) ----------
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"            # puerto-de-tu-PC : puerto-del-contenedor
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+    networks:
+      - backend_net
+
+  # ---------- FRONTEND (Next.js) ----------
+    # ---------- FRONTEND (Next.js) ----------
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      # Dirección de la API vista DESDE DENTRO de Docker.
+      API_BASE_URL: http://nginx/api
+    ports:
+      - "3000:3000"
+    depends_on:
+      - nginx
+    networks:
+      - backend_net
+
+volumes:
+  db_data:
+
+networks:
+  backend_net:
